@@ -1,0 +1,19 @@
+{
+    "name": "athoscommerce/magento2-feed-parallel",
+    "description": "Optional parallel page workers for AthosCommerce feed generation (does not modify core AthosCommerce_Feed)",
+    "type": "magento2-module",
+    "version": "1.0.0",
+    "license": "GPL-3.0-only",
+    "require": {
+        "php": "~8.1.0|~8.2.0|~8.3.0|~8.4.0|~8.5.0",
+        "athoscommerce/magento2-module": "*"
+    },
+    "autoload": {
+        "files": [
+            "registration.php"
+        ],
+        "psr-4": {
+            "AthosCommerce\\FeedParallel\\": ""
+        }
+    }
+}

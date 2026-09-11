@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<config xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:noNamespaceSchemaLocation="urn:magento:framework:ObjectManager/etc/config.xsd">
+    <preference for="AthosCommerce\FeedParallel\Api\ConfigInterface"
+                type="AthosCommerce\FeedParallel\Model\Config"/>
+    <preference for="AthosCommerce\Feed\Api\GenerateFeedInterface"
+                type="AthosCommerce\FeedParallel\Model\ParallelGenerateFeed"/>
+
+    <type name="AthosCommerce\FeedParallel\Model\ParallelGenerateFeed">
+        <arguments>
+            <argument name="sequentialGenerator" xsi:type="object">AthosCommerce\Feed\Model\GenerateFeed</argument>
+        </arguments>
+    </type>
+
+    <!-- Console Command Registration -->
+    <type name="Magento\Framework\Console\CommandListInterface">
+        <arguments>
+            <argument name="commands" xsi:type="array">
+                <item name="AthosCommerceFeedParallelPageWorkerCommand" xsi:type="object">
+                    AthosCommerce\FeedParallel\Console\Command\FeedPageWorkerCommand\Proxy
+                </item>
+            </argument>
+        </arguments>
+    </type>
+
+    <!-- Inject Proxies into Command Dependencies -->
+    <type name="AthosCommerce\FeedParallel\Console\Command\FeedPageWorkerCommand">
+        <arguments>
+            <argument name="state" xsi:type="object">Magento\Framework\App\State\Proxy</argument>
+            <argument name="pageRangeWorkerFactory" xsi:type="object">
+                AthosCommerce\FeedParallel\Model\Worker\PageRangeWorkerFactory\Proxy
+            </argument>
+        </arguments>
+    </type>
+
+
+    <type name="AthosCommerce\FeedParallel\Model\Worker\PageRangeWorker">
+        <arguments>
+            <argument name="contextManager" xsi:type="object">
+                AthosCommerce\Feed\Model\Feed\ContextManagerInterface\Proxy
+            </argument>
+            <argument name="itemsGenerator" xsi:type="object">AthosCommerce\Feed\Model\ItemsGenerator\Proxy</argument>
+            <argument name="pageRangeGenerator" xsi:type="object">
+                AthosCommerce\FeedParallel\Model\PageRangeGenerator\Proxy
+            </argument>
+        </arguments>
+    </type>
+</config>
