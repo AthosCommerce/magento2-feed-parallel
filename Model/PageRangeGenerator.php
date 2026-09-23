@@ -16,6 +16,7 @@ use AthosCommerce\Feed\Model\Feed\CollectionConfigInterface;
 use AthosCommerce\Feed\Model\ItemsGenerator;
 use AthosCommerce\FeedParallel\Model\Storage\CatalogShardWriter;
 use AthosCommerce\FeedParallel\Model\Storage\ShardWriter;
+use Magento\Framework\Filesystem\Driver\File as FileDriver;
 
 class PageRangeGenerator
 {
@@ -45,24 +46,32 @@ class PageRangeGenerator
     private $catalogShardWriter;
 
     /**
+     * @var FileDriver
+     */
+    private $fileDriver;
+
+    /**
      * @param CollectionProcessor $collectionProcessor
      * @param ItemsGenerator $itemsGenerator
      * @param CollectionConfigInterface $collectionConfig
      * @param ShardWriter $shardWriter
      * @param CatalogShardWriter $catalogShardWriter
+     * @param FileDriver $fileDriver
      */
     public function __construct(
         CollectionProcessor $collectionProcessor,
         ItemsGenerator $itemsGenerator,
         CollectionConfigInterface $collectionConfig,
         ShardWriter $shardWriter,
-        CatalogShardWriter $catalogShardWriter
+        CatalogShardWriter $catalogShardWriter,
+        FileDriver $fileDriver
     ) {
         $this->collectionProcessor = $collectionProcessor;
         $this->itemsGenerator = $itemsGenerator;
         $this->collectionConfig = $collectionConfig;
         $this->shardWriter = $shardWriter;
         $this->catalogShardWriter = $catalogShardWriter;
+        $this->fileDriver = $fileDriver;
     }
 
     /**
@@ -74,6 +83,7 @@ class PageRangeGenerator
      * @param string $shardFilePath
      * @param string|null $catalogShardFilePath
      * @return array{productCount: int, catalogRowCount: int}
+     * @throws \Magento\Framework\Exception\FileSystemException
      */
     public function generate(
         FeedSpecificationInterface $feedSpecification,
@@ -86,11 +96,11 @@ class PageRangeGenerator
             return ['productCount' => 0, 'catalogRowCount' => 0];
         }
 
-        if (is_file($shardFilePath)) {
-            unlink($shardFilePath);
+        if ($this->fileDriver->isFile($shardFilePath)) {
+            $this->fileDriver->deleteFile($shardFilePath);
         }
-        if ($catalogShardFilePath && is_file($catalogShardFilePath)) {
-            unlink($catalogShardFilePath);
+        if ($catalogShardFilePath && $this->fileDriver->isFile($catalogShardFilePath)) {
+            $this->fileDriver->deleteFile($catalogShardFilePath);
         }
 
         $collection = $this->collectionProcessor->getCollection($feedSpecification);

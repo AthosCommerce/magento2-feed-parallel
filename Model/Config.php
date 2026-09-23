@@ -15,7 +15,7 @@ use Magento\Framework\App\DeploymentConfig;
 
 class Config implements ConfigInterface
 {
-    private const string CONFIG_PATH = 'athoscommerce_feed_parallel';
+    private const CONFIG_PATH = 'athoscommerce_feed_parallel';
 
     /**
      * @var DeploymentConfig
@@ -41,6 +41,8 @@ class Config implements ConfigInterface
     }
 
     /**
+     * Read the module settings from deployment configuration.
+     *
      * @return array<string, mixed>
      */
     private function getSettings(): array
@@ -51,7 +53,7 @@ class Config implements ConfigInterface
     }
 
     /**
-     * @return mixed[]
+     * @inheritdoc
      */
     public function getSettingsAsArray(): array
     {

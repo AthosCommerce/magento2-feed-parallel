@@ -97,6 +97,9 @@ class ParallelFeedRunner
      */
     private $catalogSignedUrlStorage;
 
+    /**
+     * @var bool
+     */
     private $gcStatus = false;
 
     /**
@@ -145,6 +148,8 @@ class ParallelFeedRunner
     }
 
     /**
+     * Check whether the feed task can be generated with parallel page workers.
+     *
      * @param FeedSpecificationInterface $feedSpecification
      * @param int $workerCount
      * @return bool
@@ -159,6 +164,8 @@ class ParallelFeedRunner
     }
 
     /**
+     * Generate the product feed using parallel page workers.
+     *
      * @param FeedSpecificationInterface $feedSpecification
      * @param int $id
      * @param int $workerCount
@@ -201,74 +208,7 @@ class ParallelFeedRunner
         $this->initialize($feedSpecification);
 
         try {
-            $collection = $this->collectionProcessor->getCollection($feedSpecification);
-            $pageSize = $this->collectionConfig->getPageSize();
-            $collection->setPageSize($pageSize);
-            $pageCount = $this->getPageCount($collection);
-
-            $this->logger->info('[FeedParallel] Product collection details', [
-                'method' => __METHOD__,
-                'entityId' => $id,
-                'pageSize' => $pageSize,
-                'pageCount' => $pageCount,
-                'workerCount' => $workerCount,
-            ]);
-
-            $mainFilePath = $this->preSignedUrlStorage->getFile()->getAbsolutePath();
-            if (!$mainFilePath) {
-                throw new Exception('[FeedParallel] Main feed file path is not available.');
-            }
-            $catalogMainFilePath = null;
-            if (!empty($feedSpecification->getCatalogPreSignedUrl())) {
-                $catalogMainFilePath = $this->catalogSignedUrlStorage->getFile()->getAbsolutePath();
-                if (!$catalogMainFilePath) {
-                    throw new Exception('[FeedParallel] Catalog feed file path is not available.');
-                }
-            }
-
-             $this->logger->notice('[FeedParallel] Main feed file prepared for shard merge', [
-                 'taskId' => $id,
-                 'mainFilePath' => $mainFilePath,
-                 'catalogMainFilePath' => $catalogMainFilePath,
-                 'pageCount' => $pageCount,
-                 'pageSize' => $pageSize,
-                 'workerCount' => $workerCount,
-             ]);
-
-            $this->preSignedUrlStorage->getFile()->commit();
-            if ($catalogMainFilePath !== null) {
-                $this->catalogSignedUrlStorage->getFile()->commit();
-            }
-
-            $counts = $this->parallelPageOrchestrator->run(
-                $id,
-                $pageCount,
-                $workerCount,
-                $mainFilePath,
-                $catalogMainFilePath
-            );
-            $productCount = $counts['productCount'];
-            $catalogRowCount = $counts['catalogRowCount'];
-
-            $task = $this->taskRepository->get($id);
-            $task->setProductCount($productCount);
-            $task->setPcProductCount($catalogRowCount);
-            $this->taskRepository->save($task);
-
-            $this->logger->notice('[FeedParallel] Parallel worker phase completed', [
-                'taskId' => $id,
-                'productCount' => $productCount,
-                'catalogRowCount' => $catalogRowCount,
-                'workerCount' => $workerCount,
-            ]);
-
-            $this->finalize($feedSpecification, $id);
-
-            $this->logger->debug('[FeedParallel] Product feed generation completed', [
-                'entityId' => $id,
-                'totalSeconds' => microtime(true) - $startTime,
-                'productCount' => $productCount,
-            ]);
+            $this->generate($feedSpecification, $id, $workerCount, $startTime);
         } catch (Exception $exception) {
             $this->storage->rollback();
             if (!empty($feedSpecification->getCatalogPreSignedUrl())) {
@@ -285,6 +225,94 @@ class ParallelFeedRunner
     }
 
     /**
+     * Run the parallel workers, merge shards, update task counts and upload the feed.
+     *
+     * @param FeedSpecificationInterface $feedSpecification
+     * @param int $id
+     * @param int $workerCount
+     * @param float $startTime
+     * @return void
+     * @throws Exception
+     */
+    private function generate(
+        FeedSpecificationInterface $feedSpecification,
+        int $id,
+        int $workerCount,
+        float $startTime
+    ): void {
+        $collection = $this->collectionProcessor->getCollection($feedSpecification);
+        $pageSize = $this->collectionConfig->getPageSize();
+        $collection->setPageSize($pageSize);
+        $pageCount = $this->getPageCount($collection);
+
+        $this->logger->info('[FeedParallel] Product collection details', [
+            'method' => __METHOD__,
+            'entityId' => $id,
+            'pageSize' => $pageSize,
+            'pageCount' => $pageCount,
+            'workerCount' => $workerCount,
+        ]);
+
+        $mainFilePath = $this->preSignedUrlStorage->getFile()->getAbsolutePath();
+        if (!$mainFilePath) {
+            throw new Exception('[FeedParallel] Main feed file path is not available.');
+        }
+        $catalogMainFilePath = null;
+        if (!empty($feedSpecification->getCatalogPreSignedUrl())) {
+            $catalogMainFilePath = $this->catalogSignedUrlStorage->getFile()->getAbsolutePath();
+            if (!$catalogMainFilePath) {
+                throw new Exception('[FeedParallel] Catalog feed file path is not available.');
+            }
+        }
+
+        $this->logger->notice('[FeedParallel] Main feed file prepared for shard merge', [
+            'taskId' => $id,
+            'mainFilePath' => $mainFilePath,
+            'catalogMainFilePath' => $catalogMainFilePath,
+            'pageCount' => $pageCount,
+            'pageSize' => $pageSize,
+            'workerCount' => $workerCount,
+        ]);
+
+        $this->preSignedUrlStorage->getFile()->commit();
+        if ($catalogMainFilePath !== null) {
+            $this->catalogSignedUrlStorage->getFile()->commit();
+        }
+
+        $counts = $this->parallelPageOrchestrator->run(
+            $id,
+            $pageCount,
+            $workerCount,
+            $mainFilePath,
+            $catalogMainFilePath
+        );
+        $productCount = $counts['productCount'];
+        $catalogRowCount = $counts['catalogRowCount'];
+
+        $task = $this->taskRepository->get($id);
+        $task->setProductCount($productCount);
+        $task->setPcProductCount($catalogRowCount);
+        $this->taskRepository->save($task);
+
+        $this->logger->notice('[FeedParallel] Parallel worker phase completed', [
+            'taskId' => $id,
+            'productCount' => $productCount,
+            'catalogRowCount' => $catalogRowCount,
+            'workerCount' => $workerCount,
+        ]);
+
+        $this->finalize($feedSpecification, $id);
+
+        $this->logger->debug('[FeedParallel] Product feed generation completed', [
+            'entityId' => $id,
+            'totalSeconds' => microtime(true) - $startTime,
+            'productCount' => $productCount,
+        ]);
+    }
+
+    /**
+     * Prepare generators, context and storage before generation.
+     *
      * @param FeedSpecificationInterface $feedSpecification
      * @return void
      */
@@ -304,6 +332,8 @@ class ParallelFeedRunner
     }
 
     /**
+     * Commit feed storage (upload) and reset generation state.
+     *
      * @param FeedSpecificationInterface $feedSpecification
      * @param int $id
      * @return void
@@ -353,6 +383,8 @@ class ParallelFeedRunner
     }
 
     /**
+     * Get the number of collection pages to generate.
+     *
      * @param Collection $collection
      * @return int
      * @throws FileSystemException

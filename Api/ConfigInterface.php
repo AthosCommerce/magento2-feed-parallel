@@ -13,7 +13,16 @@ namespace AthosCommerce\FeedParallel\Api;
 interface ConfigInterface
 {
     /**
+     * Check whether parallel feed generation is enabled in app/etc/env.php.
+     *
      * @return bool
      */
     public function isEnabled(): bool;
+
+    /**
+     * Get the raw athoscommerce_feed_parallel settings from app/etc/env.php.
+     *
+     * @return array
+     */
+    public function getSettingsAsArray(): array;
 }
