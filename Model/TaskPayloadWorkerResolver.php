@@ -51,6 +51,8 @@ class TaskPayloadWorkerResolver
     }
 
     /**
+     * Resolve the worker count from the payload of the given feed task.
+     *
      * @param int $taskId
      * @return int
      * @throws NoSuchEntityException
@@ -80,7 +82,9 @@ class TaskPayloadWorkerResolver
     }
 
     /**
-     * @param array<string, mixed> $payload
+     * Resolve the worker count sent by the AthosCommerce backend in the task payload.
+     *
+     * @param array $payload
      * @return int
      */
     public function resolveFromPayload(array $payload): int

@@ -10,9 +10,15 @@ declare(strict_types=1);
 
 namespace AthosCommerce\FeedParallel\Model;
 
+use AthosCommerce\FeedParallel\Console\Command\FeedPageWorkerCommand;
 use AthosCommerce\FeedParallel\Model\Storage\ShardAppender;
+use AthosCommerce\Feed\Api\AppConfigInterface;
 use AthosCommerce\Feed\Logger\AthosCommerceLogger;
+use Magento\Framework\Filesystem\Driver\File as FileDriver;
 use Magento\Framework\Serialize\Serializer\Json as JsonSerializer;
+use Symfony\Component\Process\Exception\ProcessSignaledException;
+use Symfony\Component\Process\Exception\RuntimeException as ProcessRuntimeException;
+use Symfony\Component\Process\Process;
 
 class ParallelPageOrchestrator
 {
@@ -34,21 +40,39 @@ class ParallelPageOrchestrator
     private $jsonSerializer;
 
     /**
+     * @var FileDriver
+     */
+    private $fileDriver;
+
+    /**
+     * @var AppConfigInterface
+     */
+    private $appConfig;
+
+    /**
      * @param AthosCommerceLogger $logger
      * @param ShardAppender $shardAppender
      * @param JsonSerializer $jsonSerializer
+     * @param FileDriver $fileDriver
+     * @param AppConfigInterface $appConfig
      */
     public function __construct(
         AthosCommerceLogger $logger,
         ShardAppender $shardAppender,
-        JsonSerializer $jsonSerializer
+        JsonSerializer $jsonSerializer,
+        FileDriver $fileDriver,
+        AppConfigInterface $appConfig
     ) {
         $this->logger = $logger;
         $this->shardAppender = $shardAppender;
         $this->jsonSerializer = $jsonSerializer;
+        $this->fileDriver = $fileDriver;
+        $this->appConfig = $appConfig;
     }
 
     /**
+     * Run page-range workers in separate CLI processes and merge their shards into the main feed file.
+     *
      * @param int $taskId
      * @param int $pageCount
      * @param int $workerCount
@@ -62,8 +86,7 @@ class ParallelPageOrchestrator
         int $workerCount,
         string $mainFilePath,
         ?string $catalogMainFilePath = null
-    ): array
-    {
+    ): array {
         if ($pageCount <= 0) {
             return ['productCount' => 0, 'catalogRowCount' => 0];
         }
@@ -89,42 +112,39 @@ class ParallelPageOrchestrator
             }
             $metaPaths[] = $metaPath;
 
-            $command = sprintf(
-                '%s %s/bin/magento athoscommerce:feed-parallel:generate-page-range'
-                . ' --task-id=%d --page-start=%d --page-end=%d --shard-file=%s --catalog-shard-file=%s --meta-file=%s',
-                escapeshellarg($phpBinary),
-                escapeshellarg($magentoRoot),
-                $taskId,
-                $range['start'],
-                $range['end'],
-                escapeshellarg($shardPath),
-                escapeshellarg($catalogShardPath),
-                escapeshellarg($metaPath)
+            $process = new Process(
+                [
+                    $phpBinary,
+                    $magentoRoot . '/bin/magento',
+                    FeedPageWorkerCommand::COMMAND_NAME,
+                    '--task-id=' . $taskId,
+                    '--page-start=' . $range['start'],
+                    '--page-end=' . $range['end'],
+                    '--shard-file=' . $shardPath,
+                    '--catalog-shard-file=' . $catalogShardPath,
+                    '--meta-file=' . $metaPath,
+                ],
+                $magentoRoot,
+                null,
+                null,
+                null
             );
 
-            $descriptorSpec = [
-                0 => ['pipe', 'r'],
-                1 => ['pipe', 'w'],
-                2 => ['pipe', 'w'],
-            ];
-
-            $process = proc_open($command, $descriptorSpec, $pipes, $magentoRoot);
-            if (!is_resource($process)) {
+            try {
+                $process->start();
+            } catch (ProcessRuntimeException $exception) {
                 $this->cleanupWorkDirectory($workDir);
-                throw new \RuntimeException(sprintf('Unable to start worker process for pages %d-%d', $range['start'], $range['end']));
+                throw new \RuntimeException(
+                    sprintf('Unable to start worker process for pages %d-%d', $range['start'], $range['end']),
+                    0,
+                    $exception
+                );
             }
 
-            $status = proc_get_status($process);
-            $pid = is_array($status) ? (int)($status['pid'] ?? 0) : 0;
-
-            fclose($pipes[0]);
-            stream_set_blocking($pipes[1], false);
-            stream_set_blocking($pipes[2], false);
+            $pid = (int)$process->getPid();
 
             $processes[] = [
                 'process' => $process,
-                'stdout' => $pipes[1],
-                'stderr' => $pipes[2],
                 'range' => $range,
                 'index' => $index,
                 'pid' => $pid,
@@ -144,38 +164,15 @@ class ParallelPageOrchestrator
 
         $failedWorkers = [];
         foreach ($processes as $worker) {
-            $output = '';
-            $stderr = '';
-
-            while (true) {
-                $read = [$worker['stdout'], $worker['stderr']];
-                $write = null;
-                $except = null;
-
-                if (stream_select($read, $write, $except, 1) === false) {
-                    break;
-                }
-
-                foreach ($read as $stream) {
-                    $chunk = stream_get_contents($stream);
-                    if ($chunk === false || $chunk === '') {
-                        continue;
-                    }
-
-                    if ($stream === $worker['stdout']) {
-                        $output .= $chunk;
-                    } else {
-                        $stderr .= $chunk;
-                    }
-                }
-
-                $status = proc_get_status($worker['process']);
-                if (!$status['running']) {
-                    break;
-                }
+            /** @var Process $process */
+            $process = $worker['process'];
+            try {
+                $exitCode = $process->wait();
+            } catch (ProcessSignaledException $exception) {
+                $exitCode = 128 + $exception->getSignal();
             }
-
-            $exitCode = proc_close($worker['process']);
+            $output = $process->getOutput();
+            $stderr = $process->getErrorOutput();
 
             if ($stderr !== '') {
                 $this->logger->debug('[FeedParallel] Worker stderr', [
@@ -243,6 +240,8 @@ class ParallelPageOrchestrator
     }
 
     /**
+     * Split the page count into contiguous, inclusive page ranges (one per worker).
+     *
      * @param int $pageCount
      * @param int $workerCount
      * @return array<int, array{start: int, end: int}>
@@ -263,40 +262,57 @@ class ParallelPageOrchestrator
     }
 
     /**
+     * Create the per-task directory that holds worker shard and meta files.
+     *
      * @param int $taskId
      * @return string
+     * @throws \Magento\Framework\Exception\FileSystemException
      */
     private function createWorkDirectory(int $taskId): string
     {
         $directory = BP . '/var/' . self::SHARD_DIR . '/' . $taskId;
-        if (!is_dir($directory) && !mkdir($directory, 0775, true) && !is_dir($directory)) {
-            throw new \RuntimeException(sprintf('Unable to create parallel work directory: %s', $directory));
+        if (!$this->fileDriver->isDirectory($directory)) {
+            $this->fileDriver->createDirectory($directory, 0775);
         }
 
         return $directory;
     }
 
     /**
+     * Delete the per-task work directory with its shard and meta files.
+     *
+     * Files are kept for troubleshooting when debug mode is enabled (athoscommerce/feed/debug in app/etc/env.php).
+     * A failed cleanup is logged and never fails the feed task.
+     *
      * @param string $workDir
      * @return void
      */
     private function cleanupWorkDirectory(string $workDir): void
     {
-        if (!is_dir($workDir)) {
-            return;
-        }
-
-        /*$files = glob($workDir . '/*') ?: [];
-        foreach ($files as $file) {
-            if (is_file($file)) {
-                unlink($file);
+        try {
+            if (!$this->fileDriver->isDirectory($workDir)) {
+                return;
             }
-        }
 
-        rmdir($workDir);*/
+            if ($this->appConfig->isDebug()) {
+                $this->logger->notice('[FeedParallel] Debug mode enabled; keeping shard files', [
+                    'workDir' => $workDir,
+                ]);
+                return;
+            }
+
+            $this->fileDriver->deleteDirectory($workDir);
+        } catch (\Exception $exception) {
+            $this->logger->warning('[FeedParallel] Unable to delete shard files', [
+                'workDir' => $workDir,
+                'message' => $exception->getMessage(),
+            ]);
+        }
     }
 
     /**
+     * Sum the product and catalog row counts reported by each worker.
+     *
      * @param string[] $metaPaths
      * @return array{productCount: int, catalogRowCount: int}
      */
@@ -306,11 +322,11 @@ class ParallelPageOrchestrator
         $catalogRowCount = 0;
 
         foreach ($metaPaths as $metaPath) {
-            if (!is_readable($metaPath)) {
+            if (!$this->fileDriver->isReadable($metaPath)) {
                 throw new \RuntimeException(sprintf('Missing worker meta file: %s', $metaPath));
             }
 
-            $payload = $this->jsonSerializer->unserialize((string)file_get_contents($metaPath));
+            $payload = $this->jsonSerializer->unserialize((string)$this->fileDriver->fileGetContents($metaPath));
             if (!is_array($payload)) {
                 throw new \RuntimeException(sprintf('Invalid worker meta file: %s', $metaPath));
             }

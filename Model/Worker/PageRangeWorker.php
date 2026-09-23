@@ -92,6 +92,8 @@ class PageRangeWorker
     }
 
     /**
+     * Generate a page range for a feed task into shard and meta files.
+     *
      * @param int $taskId
      * @param int $pageStart
      * @param int $pageEnd

@@ -12,22 +12,40 @@ namespace AthosCommerce\FeedParallel\Model;
 
 use AthosCommerce\Feed\Api\Data\FeedSpecificationInterface;
 use AthosCommerce\Feed\Api\MetadataInterface;
+use Magento\Framework\Filesystem\Io\File as IoFile;
 
 class PresignUrlFormatResolver
 {
     /**
+     * @var IoFile
+     */
+    private $ioFile;
+
+    /**
+     * @param IoFile $ioFile
+     */
+    public function __construct(IoFile $ioFile)
+    {
+        $this->ioFile = $ioFile;
+    }
+
+    /**
+     * Set the feed format on the specification based on the pre-signed URL file extension.
+     *
      * @param FeedSpecificationInterface $feedSpecification
      * @return bool
      */
     public function apply(FeedSpecificationInterface $feedSpecification): bool
     {
+        // phpcs:ignore Magento2.Functions.DiscouragedFunction
         $urlPath = parse_url($feedSpecification->getPreSignedUrl(), PHP_URL_PATH);
         if (!$urlPath) {
             return false;
         }
 
-        $fileBaseExtension = strtolower(pathinfo($urlPath, PATHINFO_EXTENSION));
-        $secondExtension = strtolower(pathinfo($urlPath, PATHINFO_EXTENSION));
+        $extension = (string)($this->ioFile->getPathInfo($urlPath)['extension'] ?? '');
+        $fileBaseExtension = strtolower($extension);
+        $secondExtension = strtolower($extension);
 
         if ($fileBaseExtension === MetadataInterface::FORMAT_JSON) {
             $feedSpecification->setFormat($fileBaseExtension);

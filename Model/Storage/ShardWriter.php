@@ -10,6 +10,8 @@ declare(strict_types=1);
 
 namespace AthosCommerce\FeedParallel\Model\Storage;
 
+use Magento\Framework\Exception\FileSystemException;
+use Magento\Framework\Filesystem\Driver\File as FileDriver;
 use Magento\Framework\Serialize\Serializer\Json as JsonSerializer;
 
 class ShardWriter
@@ -20,24 +22,31 @@ class ShardWriter
     private $jsonSerializer;
 
     /**
-     * @param JsonSerializer $jsonSerializer
+     * @var FileDriver
      */
-    public function __construct(JsonSerializer $jsonSerializer)
+    private $fileDriver;
+
+    /**
+     * @param JsonSerializer $jsonSerializer
+     * @param FileDriver $fileDriver
+     */
+    public function __construct(JsonSerializer $jsonSerializer, FileDriver $fileDriver)
     {
         $this->jsonSerializer = $jsonSerializer;
+        $this->fileDriver = $fileDriver;
     }
 
     /**
-     * @param array<int, array<string, mixed>> $items
+     * Append feed items to a JSONL shard file, one item per line.
+     *
+     * @param array $items
      * @param string $shardFilePath
      * @return void
+     * @throws FileSystemException
      */
     public function appendItems(array $items, string $shardFilePath): void
     {
-        $handle = fopen($shardFilePath, 'ab');
-        if ($handle === false) {
-            throw new \RuntimeException(sprintf('Unable to open shard file: %s', $shardFilePath));
-        }
+        $handle = $this->fileDriver->fileOpen($shardFilePath, 'ab');
 
         try {
             foreach ($items as $item) {
@@ -45,21 +54,24 @@ class ShardWriter
                     unset($item['__catalog']);
                 }
 
-                fwrite(
+                $this->fileDriver->fileWrite(
                     $handle,
                     $this->jsonSerializer->serialize($item) . PHP_EOL
                 );
             }
         } finally {
-            fclose($handle);
+            $this->fileDriver->fileClose($handle);
         }
     }
 
     /**
+     * Write the worker meta file with product and catalog row counts.
+     *
      * @param int $productCount
      * @param string $metaFilePath
      * @param int $catalogRowCount
      * @return void
+     * @throws FileSystemException
      */
     public function writeMeta(int $productCount, string $metaFilePath, int $catalogRowCount = 0): void
     {
@@ -67,8 +79,6 @@ class ShardWriter
             'productCount' => $productCount,
             'catalogRowCount' => $catalogRowCount,
         ]);
-        if (file_put_contents($metaFilePath, $payload) === false) {
-            throw new \RuntimeException(sprintf('Unable to write shard meta file: %s', $metaFilePath));
-        }
+        $this->fileDriver->filePutContents($metaFilePath, $payload);
     }
 }

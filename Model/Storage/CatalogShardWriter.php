@@ -10,6 +10,9 @@ declare(strict_types=1);
 
 namespace AthosCommerce\FeedParallel\Model\Storage;
 
+use Magento\Framework\Exception\FileSystemException;
+use Magento\Framework\Filesystem\Driver\File as FileDriver;
+
 class CatalogShardWriter
 {
     private const HEADER = [
@@ -25,19 +28,32 @@ class CatalogShardWriter
     ];
 
     /**
-     * @param array<int, array<string, mixed>> $items
+     * @var FileDriver
+     */
+    private $fileDriver;
+
+    /**
+     * @param FileDriver $fileDriver
+     */
+    public function __construct(FileDriver $fileDriver)
+    {
+        $this->fileDriver = $fileDriver;
+    }
+
+    /**
+     * Append catalog rows from feed items to a TSV shard file (header written once).
+     *
+     * @param array $items
      * @param string $shardFilePath
      * @return int
+     * @throws FileSystemException
      */
     public function appendItems(array $items, string $shardFilePath): int
     {
-        clearstatcache(true, $shardFilePath);
-        $writeHeader = !is_file($shardFilePath) || filesize($shardFilePath) === 0;
+        $writeHeader = !$this->fileDriver->isFile($shardFilePath)
+            || (int)($this->fileDriver->stat($shardFilePath)['size'] ?? 0) === 0;
 
-        $handle = fopen($shardFilePath, 'ab');
-        if ($handle === false) {
-            throw new \RuntimeException(sprintf('Unable to open catalog shard file: %s', $shardFilePath));
-        }
+        $handle = $this->fileDriver->fileOpen($shardFilePath, 'ab');
 
         try {
             if ($writeHeader) {
@@ -59,26 +75,29 @@ class CatalogShardWriter
                 ]);
             }
         } finally {
-            fclose($handle);
+            $this->fileDriver->fileClose($handle);
         }
 
         return count($catalogRows);
     }
 
     /**
+     * Write one tab-separated row the same way the core catalog export does (File\Write::writeCsv()).
+     *
      * @param resource $handle
-     * @param array<int, scalar|null> $row
+     * @param array $row
      * @return void
+     * @throws FileSystemException
      */
     private function writeRow($handle, array $row): void
     {
-        if (fputcsv($handle, $row, "\t") === false) {
-            throw new \RuntimeException('Unable to write catalog shard row.');
-        }
+        $this->fileDriver->filePutCsv($handle, $row, "\t");
     }
 
     /**
-     * @param array<int, array<string, mixed>> $items
+     * Collect unique catalog rows (keyed by record hash) from the feed items.
+     *
+     * @param array $items
      * @return array<string, array<string, mixed>>
      */
     private function extractCatalogRows(array $items): array
